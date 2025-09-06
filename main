@@ -1,0 +1,375 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+import json
+import os
+from datetime import datetime, timedelta
+
+class ComicTracker:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Comic Tracker")
+        self.root.geometry("1000x700")
+        
+        # Data file
+        self.data_file = "comics_data.json"
+        self.comics = self.load_data()
+        
+        # Categories and statuses
+        self.categories = ["Top Reads", "B Tier", "C Tier", "Unread"]
+        self.statuses = ["Ongoing", "On Hold", "Dead", "Completed"]
+        
+        self.setup_ui()
+        self.refresh_display()
+    
+    def load_data(self):
+        """Load comics data from JSON file"""
+        if os.path.exists(self.data_file):
+            try:
+                with open(self.data_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def save_data(self):
+        """Save comics data to JSON file"""
+        with open(self.data_file, 'w') as f:
+            json.dump(self.comics, f, indent=2) #form this point on this it is mostly GUI stuff
+    
+    def setup_ui(self):
+        """Setup the user interface"""
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(1, weight=1)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Comic Tracker", font=("Arial", 16, "bold"))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 10))
+        
+        # Controls frame
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.grid(row=1, column=0, sticky=(tk.W, tk.N), padx=(0, 10))
+        
+        # Add comic button
+        ttk.Button(controls_frame, text="Add Comic", command=self.add_comic).grid(row=0, column=0, pady=2, sticky=tk.W)
+        
+        # Filter options
+        ttk.Label(controls_frame, text="Filter by Category:").grid(row=1, column=0, pady=(10, 2), sticky=tk.W)
+        self.category_filter = ttk.Combobox(controls_frame, values=["All"] + self.categories, state="readonly")
+        self.category_filter.set("All")
+        self.category_filter.grid(row=2, column=0, pady=2, sticky=tk.W)
+        self.category_filter.bind('<<ComboboxSelected>>', lambda e: self.refresh_display())
+        
+        ttk.Label(controls_frame, text="Filter by Status:").grid(row=3, column=0, pady=(10, 2), sticky=tk.W)
+        self.status_filter = ttk.Combobox(controls_frame, values=["All"] + self.statuses, state="readonly")
+        self.status_filter.set("All")
+        self.status_filter.grid(row=4, column=0, pady=2, sticky=tk.W)
+        self.status_filter.bind('<<ComboboxSelected>>', lambda e: self.refresh_display())
+        
+        # Color legend
+        ttk.Label(controls_frame, text="Color Legend:", font=("Arial", 10, "bold")).grid(row=5, column=0, pady=(20, 5), sticky=tk.W)
+        legend_frame = ttk.Frame(controls_frame)
+        legend_frame.grid(row=6, column=0, sticky=tk.W)
+        
+        # Create colored labels for legend
+        recent_label = tk.Label(legend_frame, text="< 1 week", bg="lightgreen", width=10)
+        recent_label.grid(row=0, column=0, pady=1)
+        
+        warning_label = tk.Label(legend_frame, text="1-2 weeks", bg="yellow", width=10)
+        warning_label.grid(row=1, column=0, pady=1)
+        
+        old_label = tk.Label(legend_frame, text="> 2 weeks", bg="lightcoral", width=10)
+        old_label.grid(row=2, column=0, pady=1)
+        
+        # Comics display frame
+        display_frame = ttk.Frame(main_frame)
+        display_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        display_frame.columnconfigure(0, weight=1)
+        display_frame.rowconfigure(0, weight=1)
+        
+        # Treeview for comics
+        columns = ("Name", "Chapter", "Category", "Status", "Last Updated")
+        self.tree = ttk.Treeview(display_frame, columns=columns, show="headings", height=20)
+        
+        # Define column headings and widths
+        self.tree.heading("Name", text="Comic Name")
+        self.tree.heading("Chapter", text="Current Chapter")
+        self.tree.heading("Category", text="Category")
+        self.tree.heading("Status", text="Status")
+        self.tree.heading("Last Updated", text="Last Updated")
+        
+        self.tree.column("Name", width=200)
+        self.tree.column("Chapter", width=100)
+        self.tree.column("Category", width=100)
+        self.tree.column("Status", width=100)
+        self.tree.column("Last Updated", width=150)
+        
+        # Scrollbar for treeview
+        scrollbar = ttk.Scrollbar(display_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Context menu
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Update Chapter", command=self.update_chapter)
+        self.context_menu.add_command(label="Edit Comic", command=self.edit_comic)
+        self.context_menu.add_command(label="Delete Comic", command=self.delete_comic)
+        
+        # Bind right-click to show context menu
+        self.tree.bind("<Button-3>", self.show_context_menu)
+        
+        # Bind double-click to update chapter
+        self.tree.bind("<Double-1>", lambda e: self.update_chapter())
+    
+    def get_time_color(self, last_updated):
+        """Get color based on time since last update"""
+        try:
+            last_update_date = datetime.fromisoformat(last_updated)
+            days_since = (datetime.now() - last_update_date).days
+            
+            if days_since < 7:
+                return "lightgreen"
+            elif days_since < 14:
+                return "yellow"
+            else:
+                return "lightcoral"
+        except:
+            return "white"
+    
+    def refresh_display(self):
+        """Refresh the display of comics"""
+        # Clear existing items
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Get filter values
+        category_filter = self.category_filter.get()
+        status_filter = self.status_filter.get()
+        
+        # Add filtered comics
+        for comic_name, comic_data in self.comics.items():
+            # Apply filters
+            if category_filter != "All" and comic_data.get("category", "") != category_filter:
+                continue
+            if status_filter != "All" and comic_data.get("status", "") != status_filter:
+                continue
+            
+            # Format last updated date
+            last_updated = comic_data.get("last_updated", "Never")
+            if last_updated != "Never":
+                try:
+                    date_obj = datetime.fromisoformat(last_updated)
+                    formatted_date = date_obj.strftime("%Y-%m-%d %H:%M")
+                except:
+                    formatted_date = last_updated
+            else:
+                formatted_date = "Never"
+            
+            # Insert item
+            item_id = self.tree.insert("", tk.END, values=(
+                comic_name,
+                comic_data.get("chapter", "N/A"),
+                comic_data.get("category", "Unread"),
+                comic_data.get("status", "Unknown"),
+                formatted_date
+            ))
+            
+            # Set background color based on last updated time
+            if last_updated != "Never":
+                color = self.get_time_color(last_updated)
+                self.tree.set(item_id, "Last Updated", formatted_date)
+                # Color the entire row
+                self.tree.item(item_id, tags=(color,))
+                self.tree.tag_configure(color, background=color)
+    
+    def show_context_menu(self, event):
+        """Show context menu on right-click"""
+        item = self.tree.selection()[0] if self.tree.selection() else None
+        if item:
+            self.context_menu.post(event.x_root, event.y_root)
+    
+    def add_comic(self):
+        """Add a new comic"""
+        dialog = ComicDialog(self.root, "Add Comic")
+        if dialog.result:
+            name, chapter, category, status = dialog.result
+            if name in self.comics:
+                messagebox.showerror("Error", "Comic already exists!")
+                return
+            
+            self.comics[name] = {
+                "chapter": chapter,
+                "category": category,
+                "status": status,
+                "last_updated": datetime.now().isoformat()
+            }
+            self.save_data()
+            self.refresh_display()
+    
+    def update_chapter(self):
+        """Update the current chapter for selected comic"""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a comic first!")
+            return
+        
+        item = selection[0]
+        comic_name = self.tree.item(item)["values"][0]
+        current_chapter = self.comics[comic_name].get("chapter", "")
+        
+        new_chapter = simpledialog.askstring(
+            "Update Chapter", 
+            f"Enter new chapter for '{comic_name}':",
+            initialvalue=current_chapter
+        )
+        
+        if new_chapter is not None:
+            self.comics[comic_name]["chapter"] = new_chapter
+            self.comics[comic_name]["last_updated"] = datetime.now().isoformat()
+            self.save_data()
+            self.refresh_display()
+    
+    def edit_comic(self):
+        """Edit selected comic"""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a comic first!")
+            return
+        
+        item = selection[0]
+        comic_name = self.tree.item(item)["values"][0]
+        comic_data = self.comics[comic_name]
+        
+        dialog = ComicDialog(
+            self.root, 
+            "Edit Comic", 
+            comic_name, 
+            comic_data.get("chapter", ""),
+            comic_data.get("category", "Unread"),
+            comic_data.get("status", "Unknown")
+        )
+        
+        if dialog.result:
+            new_name, chapter, category, status = dialog.result
+            
+            # If name changed, update the dictionary
+            if new_name != comic_name:
+                if new_name in self.comics:
+                    messagebox.showerror("Error", "Comic name already exists!")
+                    return
+                self.comics[new_name] = self.comics.pop(comic_name)
+                comic_name = new_name
+            
+            self.comics[comic_name].update({
+                "chapter": chapter,
+                "category": category,
+                "status": status,
+                "last_updated": datetime.now().isoformat()
+            })
+            self.save_data()
+            self.refresh_display()
+    
+    def delete_comic(self):
+        """Delete selected comic"""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a comic first!")
+            return
+        
+        item = selection[0]
+        comic_name = self.tree.item(item)["values"][0]
+        
+        if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{comic_name}'?"):
+            del self.comics[comic_name]
+            self.save_data()
+            self.refresh_display()
+
+class ComicDialog:
+    def __init__(self, parent, title, name="", chapter="", category="Unread", status="Unknown"):
+        self.result = None
+        
+        # Create dialog window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("350x200")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center the dialog
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        
+        # Create form
+        frame = ttk.Frame(self.dialog, padding="20")
+        frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Name entry
+        ttk.Label(frame, text="Comic Name:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.name_entry = ttk.Entry(frame, width=30)
+        self.name_entry.grid(row=0, column=1, pady=2)
+        self.name_entry.insert(0, name)
+        
+        # Chapter entry
+        ttk.Label(frame, text="Current Chapter:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.chapter_entry = ttk.Entry(frame, width=30)
+        self.chapter_entry.grid(row=1, column=1, pady=2)
+        self.chapter_entry.insert(0, chapter)
+        
+        # Category combobox
+        ttk.Label(frame, text="Category:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.category_combo = ttk.Combobox(frame, values=["Top Reads", "B Tier", "C Tier", "Unread"], state="readonly", width=27)
+        self.category_combo.grid(row=2, column=1, pady=2)
+        self.category_combo.set(category)
+        
+        # Status combobox
+        ttk.Label(frame, text="Status:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.status_combo = ttk.Combobox(frame, values=["Ongoing", "On Hold", "Dead", "Completed"], state="readonly", width=27)
+        self.status_combo.grid(row=3, column=1, pady=2)
+        self.status_combo.set(status)
+        
+        # Buttons
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=4, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(button_frame, text="OK", command=self.ok_clicked).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.cancel_clicked).grid(row=0, column=1, padx=5)
+        
+        # Focus on name entry
+        self.name_entry.focus()
+        self.name_entry.select_range(0, tk.END)
+        
+        # Bind Enter key to OK
+        self.dialog.bind('<Return>', lambda e: self.ok_clicked())
+        self.dialog.bind('<Escape>', lambda e: self.cancel_clicked())
+        
+        # Wait for dialog to close
+        self.dialog.wait_window()
+    
+    def ok_clicked(self):
+        name = self.name_entry.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Comic name is required!")
+            return
+        
+        self.result = (
+            name,
+            self.chapter_entry.get().strip(),
+            self.category_combo.get(),
+            self.status_combo.get()
+        )
+        self.dialog.destroy()
+    
+    def cancel_clicked(self):
+        self.dialog.destroy()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ComicTracker(root)
+    root.mainloop()
